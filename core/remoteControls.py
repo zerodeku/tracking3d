@@ -249,6 +249,7 @@ def SaveImageToTiff(winID, path, width, height, *args):
     for x in range(0, h*w-1):
         img[x] = float(bufP[x])
     img = np.reshape(img, (h, w))
+    print len(args)
     if len(args) == 0:
         minVal = np.min(img)
         maxVal = np.max(img)

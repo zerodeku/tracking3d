@@ -8,7 +8,7 @@ Created on Thu Jun 16 18:19:25 2016
 import sys
 from threading import Thread
 
-from guidata.qt.QtGui import QMainWindow, QWidget, QSplitter
+from guidata.qt.QtGui import QMainWindow, QWidget, QSplitter, QPushButton
 from guidata.qt import QtCore
 from guidata.qt.QtCore import SIGNAL
 from guidata.dataset.qtwidgets import DataSetEditGroupBox
@@ -34,17 +34,22 @@ class MainWindow(Thread, QMainWindow):
                     gui_construction.RemoteParameters, comment='')
         self.gb_tracking = DataSetEditGroupBox("Tracking", 
                     gui_construction.TrackingParameters, comment='')
+                    
+        self.btn_process = QPushButton("Start tracking", self)
+        self.btn_process.clicked.connect(self.start_tracking)
            
         # associate events to dataset apply buttons
         self.connect(self.gb_sequence, SIGNAL("apply_button_clicked()"), 
                      self.update_remote_params)
         self.connect(self.gb_tracking, SIGNAL("apply_button_clicked()"), 
                      self.update_tracking_params)        
-        
+
         # organize the app panels
         splitter1 = QSplitter(QtCore.Qt.Vertical)
         splitter1.addWidget(self.gb_sequence)
         splitter1.addWidget(self.gb_tracking)
+        splitter1.addWidget(self.btn_process)
+        
         
         splitter = QSplitter(self)
         splitter.addWidget(splitter1)
@@ -52,7 +57,8 @@ class MainWindow(Thread, QMainWindow):
         self.setContentsMargins(10, 5, 10, 5)   
         
         # get all params from datasets
-#        self.gb_sequence.get()
+        self.gb_sequence.get()
+        self.gb_tracking.get()
         
     # when the main program is closed
     def closeEvent(self, event):
@@ -65,13 +71,21 @@ class MainWindow(Thread, QMainWindow):
     def update_remote_params(self):
         utils.Log("Sequence parameters initialized")
         self.tracking.initRemoteKoala(self.gb_sequence.dataset)
-        self.gb_sequence.setEnabled(False)
+        self.gb_sequence.dataset.last_holo_seq = \
+                    (int)(self.tracking.remoteKoala.framesNumber) - 1
+        self.gb_sequence.get()
+#        self.gb_sequence.setEnabled(False)
         self.tracking.setupKoala()
-    
+        
     # update tracking parameters 
     def update_tracking_params(self):
         utils.Log("Tracking paramters initialized")
-                
+        self.tracking.removeBcg = self.gb_tracking.dataset.bcgRemove
+        
+    # initiate tracking process
+    def start_tracking(self):
+        utils.Log("Start tracking process")
+        self.tracking.performTracking()
         
         
 # main to run the application

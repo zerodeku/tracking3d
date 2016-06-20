@@ -118,8 +118,7 @@ class RemoteKoala:
             self.frames_number = self.frames_Number(self.directoryPath+\
             '\\Holograms', '.tif')
             self.bpp = 8
-
-            
+  
         return holopath
         
     def ConnectKoala(self):
@@ -147,7 +146,7 @@ class RemoteKoala:
     def OpenHologram(self):
         path = self.path_xth_holo(self.first_holo_seq)#path of the xth hologram
         self.remoteCommands.OpenHologram(path, self.configType)
-        time.sleep(.1)
+        time.sleep(.01)
         #get the reconstructed pixel size from Koala
         self.pxSize = self.remoteCommands.GetPxSizeUm()
         #get phase image width from Koala
@@ -156,7 +155,6 @@ class RemoteKoala:
         self.height = self.remoteCommands.GetPhaseHeight()
         #last first Holo of the sequence if the actual
         self.lastfirst_holo_seq = self.first_holo_seq
-        
     def OpenHoloFromPath(self, path):
         #remote open hologram from path and configType
         self.remoteCommands.OpenHologram(path, self.configType)

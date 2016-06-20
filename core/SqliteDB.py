@@ -31,7 +31,7 @@ class DBReader:
         self.dbKoalaExist = True
         self.ConfigROI = [0, 0, 1024, 1024]
         self.conKoala = None
-        self.testDirectory = r'C:\Users\zerodeku\Documents\DHM data\16.06.16 - E. coli M1 - 63x\2016.06.16 15-45'        
+        self.testDirectory = r'C:\Users\zerodeku\Documents\2016.06.16 15-46'        
         
         # connection to db and import params
         with self.con:

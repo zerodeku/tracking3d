@@ -72,6 +72,7 @@ def OpenTxtFile(text, path):
 def CreateDirectory(directoryPath, directoryName):
     if not os.path.exists(directoryPath+'\\'+directoryName):
         os.makedirs(directoryPath+'\\'+directoryName)
+    return directoryPath + '\\' + directoryName
         
 def DeleteAllFilesInDirectory(directoryPath):
     filelist = [f for f in os.listdir(directoryPath) if f.endswith(".bin")]
@@ -89,6 +90,11 @@ def ErrorMessage(message):
 
 def Log(message):
     print message
+
+def DisplayImage(img):
+    plt.imshow(img)
+    plt.gray()
+    plt.show()
 
 def SaveParamsFile(ColumnTitles, Values, fname):
     if np.size(ColumnTitles) != np.size(Values):
