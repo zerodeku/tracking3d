@@ -12,7 +12,7 @@ from guidata.qt.QtGui import QFileDialog, QMessageBox
 import numpy as np
 from os import listdir
 from os.path import isfile, join
-
+from matplotlib import pyplot as plt
 
 
 #%% MessageBox to take password entry

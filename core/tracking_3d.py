@@ -7,7 +7,7 @@ Created on Sun Jun 19 13:15:23 2016
 
 from tracking3d.core import remote_Koala
 from tracking3d.core import SqliteDB
-import time
+import time, os
 from tracking3d.core import utilsForProcessing as utils
 from guidata.qt import QtGui
 import numpy as np
@@ -20,13 +20,28 @@ class Tracking3D:
         self.db = None
         # remote parameters
         self.contrast = ['lambda1', 'mapping']
-        self.recDist = -2.5 # initial reconstruction distance
+        self.centRecDist = -2.5 # initial reconstruction distance
         self.width = 750 # image width
         self.height = 750 # image height
         self.pixSize = 1 # real value is updated when holograph is loaded
         self.KoalaViewSize = 748 # Koala software phase image view size
+        self.dof = None # depth of field
+        self.ratioDOF = None
+        self.NA = None
+        self.MO = None
+        self.CCDPixelSizeUM = None
+        self.zConvert = None
+        self.stepUM = None
+        self.stackHeightUM = None
+        self.rangeRecDist = None
+        
+        # sample related parameters
+        self.chamberIndex = None
+        self.mediumIndex = None
+        
         # tracking parameters and data
         self.phaseBcg = None
+        self.meanPhaseIntensity = None
         self.numHolos = 0
         self.holoNum = 0
         self.prevPhase = None
@@ -37,9 +52,9 @@ class Tracking3D:
         self.threshMethod = None
         self.zfocusMethod = None
         self.directory = None
-        self.removeBcg = False
-        self.progressBar = None
+        self.bcgRemove = True
         self.tempDir = None
+        self.tempPhaseDir = None
         
     @classmethod # RemoteKoala singleton method
     def getInstance(cls):
@@ -65,17 +80,45 @@ class Tracking3D:
         self.remoteKoala.OpenConfig()
         self.remoteKoala.OpenHologram()
         time.sleep(0.1)
-        self.pixSize = self.remoteKoala.pxSize
         self.reconsAdjust()
+        self.remoteKoala.GetLambdaNm()
         self.updatePhaseImage()
         
         # some testing tasks
 #        self.getCurPhaseImage()
-        self.iterOverAllFrames()
+#        self.iterOverAllFrames()
+#        self.computeBcg()
+#        self.testProgressBar()
+#        self.saveAllPhaseImages()
+    def initSampleParams(self, data):
+        self.mediumIndex = data.index_medium
+        self.chamberIndex = data.index_chamber
+        self.sampleIndex = data.index_sample
+        self.particleSize = data.particle_size
+        self.particleMaxSpeed = data.max_speed
     
+    def initTrackingParams(self, data):
+        self.rangeRecDist = data.range_rec_dist
+        self.ratioDOF = data.ratio_DOF
+        self.bcgRemove = data.bcgRemove
+        self.centRecDist = data.central_rec_dist
+        
+        self.NA = self.db.NA
+        self.CCDPixelSizeUM = self.db.CCDPixelSizeUM
+        self.pxSize = self.remoteKoala.pxSize
+        self.dof = self.remoteKoala.wavelength / (self.NA**2) * 1e-7
+        self.MO = self.CCDPixelSizeUM / self.pxSize
+        self.stepRecDist = self.MO**2 * self.dof / self.mediumIndex \
+                               / self.ratioDOF * self.chamberIndex
+        self.zConvert = 1e4 / self.MO**2 * self.mediumIndex / self.chamberIndex
+        
+        self.stepUM = self.stepRecDist * self.zConvert
+        self.stackHeightUM = self.rangeRecDist * 2 * self.zConvert
+        
+        
     # basic ajustments for reconstruction
     def reconsAdjust(self):
-        self.remoteKoala.remoteCommands.SetRecDistCM(self.recDist)
+        self.remoteKoala.remoteCommands.SetRecDistCM(self.centRecDist)
         self.remoteKoala.remoteCommands.SetUnwrap2DState(True)
         
         # define some line segments for tilt correction
@@ -98,7 +141,79 @@ class Tracking3D:
         self.remoteKoala.remoteCommands.SaveImageToTiffThroughKoala(4, phasePath)
         img = Image.open(phasePath)
         self.curPhase = np.array(img)
+    
+    # save all phase images at current rec dist to disk
+    def saveAllPhaseImages(self):
+        progressBar = ProgressBar(self.numHolos)
+        progressBar.setWindowTitle('Saving phase')
+        progressBar.show()
         
+        self.tempPhaseDir = utils.CreateDirectory(self.tempDir, 'phase')
+        for f in xrange(self.numHolos):
+            phasePath = self.tempPhaseDir + '\\phase_' +  str(f).zfill(5) + '.tif'
+            self.remoteKoala.first_holo_seq = f
+            self.remoteKoala.OpenHologram()
+            self.remoteKoala.remoteCommands.SaveImageToTiffThroughKoala(4, phasePath)
+            progressBar.progressbar.setValue(f + 1)
+            QtGui.qApp.processEvents()
+        self.remoteKoala.first_holo_seq = 0
+        
+        progressBar._active = False
+        progressBar.close()
+    
+    # compute the background as the median of all the phase images
+    def computeBcg(self):
+        progressBar = ProgressBar(self.numHolos)
+        progressBar.setWindowTitle('Computing bcg')
+        progressBar.show()
+        phaseAll = []
+        step = 5
+        for f in xrange(0, self.numHolos, step):
+            phasePath = self.tempPhaseDir + '\\phase_' +  str(f).zfill(5) + '.tif'
+            img = Image.open(phasePath)
+            phaseAll.append(np.array(img))
+            progressBar.progressbar.setValue(f + step)
+            QtGui.qApp.processEvents()
+        
+        phaseAll = np.asanyarray(phaseAll)
+        self.meanPhaseIntensity = np.sum(np.mean(phaseAll, 0))
+        self.phaseBcg = np.median(phaseAll, 0).astype('uint8')
+        path = self.tempDir + '\\phaseBcg.tif'
+        img = Image.fromarray(self.phaseBcg)
+        img.save(path)
+        
+        progressBar._active = False
+        progressBar.close()    
+    
+    def subtractBcg(self):        
+        progressBar = ProgressBar(self.numHolos)
+        progressBar.setWindowTitle('Subtracting bcg')
+        progressBar.show()
+        
+        phase_removedBcg = utils.CreateDirectory(self.tempDir, 'phase_removedBcg')
+        for f in xrange(self.numHolos):
+            phasePath = self.tempPhaseDir + '\\phase_' +  str(f).zfill(5) + '.tif'
+            img = Image.open(phasePath)
+            img_arr = np.array(img).astype('int')
+            
+            factor = self.meanPhaseIntensity / img_arr.sum()
+            img_arr = img_arr * factor
+            
+            img_arr = img_arr - self.phaseBcg
+            img_arr[img_arr < 0] = 0
+            img_arr[img_arr > 10] = 255
+
+#            img_arr = cv2.equalizeHist(img_arr)
+            img = Image.fromarray(img_arr.astype('uint8'))        
+            phasePath = phase_removedBcg + '\\phase_' +  str(f).zfill(5) + '.tif'
+            img.save(phasePath)
+            
+            progressBar.progressbar.setValue(f + 1)
+            QtGui.qApp.processEvents()
+        
+        progressBar._active = False
+        progressBar.close() 
+    
     # deprecated
 #    def updatePhaseImage(self):
 #        self.prevPhase = self.curPhase
@@ -113,42 +228,31 @@ class Tracking3D:
         self.remoteKoala.first_holo_seq = 0
         self.getPhaseImageByHoloNum(0)
         self.prevPhase = None
-            
-    # go through all holos one by one
-    def iterOverAllFrames(self):
-        for f in xrange(self.remoteKoala.framesNumber):
-            tic = time.clock()
-            self.getPhaseImageByHoloNum(f)
-            toc = time.clock()
-            print "Elapsed time: " + str(toc - tic)
-        self.remoteKoala.first_holo_seq = 0
         
     def saveCurPhase(self):
         path = self.directory + "\\test_phase.tif"
         self.remoteKoala.remoteCommands.SaveImageToTiffThroughKoala(4, path) 
         
-    # compute the background as the median of all the phase images
-    def computeBcg(self):
-        phaseAll = []
-        self.progressBar = ProgressBar(self.numHolos)
-        self.progressBar.show()
-        for f in xrange(self.remoteKoala.framesNumber):
-            self.progressBar.progressbar.setValue(self.numHolos - 1 - f)
-            self.getPhaseImageByHoloNum(f)
-            phaseAll.append(self.curPhase)
-        self.progressBar._active = False
-        self.resetPhaseImage()
-        self.phaseBcg = np.median(phaseAll, 0)
-        utils.DisplayImage(self.phaseBcg)
-        path = utils.CreateDirectory(self.directory, 'phaseBcg.tif')
-        bcg = np.array(self.phaseBcg)
-        img = Image.fromarray(bcg)
-        img.save(path)
-
     def performTracking(self):
-        if self.removeBcg:
+        self.tempPhaseDir = self.tempDir + '\\phase'
+        if not os.path.exists(self.tempPhaseDir):
+            self.saveAllPhaseImages()
+#        self.saveAllPhaseImages()
+        if self.bcgRemove:
             self.computeBcg()
+            self.subtractBcg()
+        
 
+
+    # for testing the progress bar
+    def testProgressBar(self):
+        progressBar = ProgressBar(self.numHolos)
+        progressBar.show()
+        time.sleep(1)
+        progressBar.progressbar.setValue(self.numHolos / 2)
+        time.sleep(1)
+        progressBar._active = False
+        progressBar.close()        
     
 class HVSeg:
     def __init__(self, top, left, length, orient):

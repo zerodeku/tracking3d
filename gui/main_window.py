@@ -32,24 +32,28 @@ class MainWindow(Thread, QMainWindow):
         # init dataset from gui_construction
         self.gb_sequence = DataSetEditGroupBox("Sequence", 
                     gui_construction.RemoteParameters, comment='')
+        self.gb_sample = DataSetEditGroupBox("Sample", 
+                    gui_construction.SampleParameters, comment='')
         self.gb_tracking = DataSetEditGroupBox("Tracking", 
                     gui_construction.TrackingParameters, comment='')
                     
         self.btn_process = QPushButton("Start tracking", self)
         self.btn_process.clicked.connect(self.start_tracking)
-           
+
         # associate events to dataset apply buttons
         self.connect(self.gb_sequence, SIGNAL("apply_button_clicked()"), 
                      self.update_remote_params)
         self.connect(self.gb_tracking, SIGNAL("apply_button_clicked()"), 
-                     self.update_tracking_params)        
-
+                     self.update_tracking_params)     
+        self.connect(self.gb_sample, SIGNAL("apply_button_clicked()"), 
+                     self.update_sample_parameters)
+                     
         # organize the app panels
         splitter1 = QSplitter(QtCore.Qt.Vertical)
         splitter1.addWidget(self.gb_sequence)
+        splitter1.addWidget(self.gb_sample)
         splitter1.addWidget(self.gb_tracking)
         splitter1.addWidget(self.btn_process)
-        
         
         splitter = QSplitter(self)
         splitter.addWidget(splitter1)
@@ -58,6 +62,7 @@ class MainWindow(Thread, QMainWindow):
         
         # get all params from datasets
         self.gb_sequence.get()
+        self.gb_sample.get()
         self.gb_tracking.get()
         
     # when the main program is closed
@@ -76,11 +81,18 @@ class MainWindow(Thread, QMainWindow):
         self.gb_sequence.get()
 #        self.gb_sequence.setEnabled(False)
         self.tracking.setupKoala()
-        
+    
+    def update_sample_parameters(self):
+        utils.Log("Sample paramters initialized")
+        self.tracking.initSampleParams(self.gb_sample.dataset)
+      
     # update tracking parameters 
     def update_tracking_params(self):
         utils.Log("Tracking paramters initialized")
-        self.tracking.removeBcg = self.gb_tracking.dataset.bcgRemove
+        self.tracking.initTrackingParams(self.gb_tracking.dataset)
+        self.gb_tracking.dataset.samplePlaneStepUM = self.tracking.stepUM
+        self.gb_tracking.dataset.stackHeightUM = self.tracking.stackHeightUM
+        self.gb_tracking.get()
         
     # initiate tracking process
     def start_tracking(self):
