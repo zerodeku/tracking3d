@@ -63,7 +63,7 @@ class TrackingParameters(DataSet):
 #    it_dil = IntItem(_("Iter. dilatation"),
 #                          default=4, slider=False, unit='pixels', 
 #                          min=0).set_prop("display", callback=None)
-    central_rec_dist = FloatItem(_("Central Rec. dist."), default=-1.3, 
+    central_rec_dist = FloatItem(_("Central Rec. dist."), default=-1.7, 
             min=-100, max=100, unit='cm').set_prop("display", callback=None)
     range_rec_dist = FloatItem(_("Range Rec. dist."), default=1, min=-100, max=100, 
                            unit='cm').set_prop("display", callback=None)

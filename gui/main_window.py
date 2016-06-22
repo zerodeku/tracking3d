@@ -36,7 +36,7 @@ class MainWindow(Thread, QMainWindow):
                     gui_construction.SampleParameters, comment='')
         self.gb_tracking = DataSetEditGroupBox("Tracking", 
                     gui_construction.TrackingParameters, comment='')
-                    
+            
         self.btn_process = QPushButton("Start tracking", self)
         self.btn_process.clicked.connect(self.start_tracking)
 
