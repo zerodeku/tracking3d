@@ -13,6 +13,11 @@ from guidata.qt import QtGui
 import numpy as np
 from PIL import Image
 import cv2
+from enum import Enum
+from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import scipy.io
+import pickle
 
 class Tracking3D:
     tracking = None
@@ -46,18 +51,28 @@ class Tracking3D:
         self.meanPhaseIntensity = None
         self.numHolos = 0
         self.reconsDist = 0
-        self.threshold = 40
+        self.threshold = 50
         self.directory = None
         self.bcgRemove = True
         self.tempDir = None
         self.tempPhaseDir = None
         self.tempPhaseBcgRemovedDir = None 
         self.tempPhaseStackDir = None
-        self.zSearchDX = 20
-        self.zsearchDY = 20
+        self.zSearchDX = 5
+        self.zSearchDY = 5
         self.nextSearchDX = 0
         self.nextSearchDY = 0
-        
+        self.allFramePoints = None
+        self.allFramePoses = None
+        self.allPosObj = None
+        self.curPhase = None
+        self.prevPhase = None
+        self.holoNum = 0
+        self.fps = -1
+        self.allTracks = None
+        self.trackDX = 4
+        self.trackDY = 4
+        self.trackDZ = 6
         
     @classmethod # RemoteKoala singleton method
     def getInstance(cls):
@@ -76,6 +91,7 @@ class Tracking3D:
         self.remoteKoala.DefineSeqFormat()
         self.numHolos = self.remoteKoala.framesNumber
         self.tempDir = utils.CreateDirectory(self.directory, 'tmp')
+        self.getFPS()
         
     # connect Koala and open windows
     def setupKoala(self):
@@ -214,7 +230,7 @@ class Tracking3D:
         progressBar = ProgressBar(self.stackHeightUM + 1)
         progressBar.setWindowTitle('Computing bcg')
         progressBar.show()
-        step = 5
+        step = 1
         stackBcgDir = utils.CreateDirectory(self.tempDir, 'stackBcg')
         meanIntensityAll = []
         
@@ -347,13 +363,222 @@ class Tracking3D:
 #        self.curPhase = self.remoteKoala.remoteCommands.getPhase32fImage(
 #            self.contrast[0], self.width, self.height) 
        
-    def detectAndTrack3d(self):
-        utils.Log("Start detection and tracking")
-        openTracks = []
-        closedTracks = []
-        curPoses = []
+    def detect3DPoses(self):
+        utils.Log("--Start detection and tracking")
+        progressBar = ProgressBar(self.numHolos)
+        progressBar.setWindowTitle('Detecting 3d')
+        progressBar.show()           
         
-       
+        detector = self.getDetector()
+        allFramePoses = []
+        allFramePoints = []
+        allPosObj = []
+        numFrames = self.numHolos
+        for f in xrange(numFrames):
+            stackDir = self.tempDir + '\\phaseStack_removedBcg\\phaseStack_' +\
+                str(f).zfill(5)
+            framePoses = [[], [], []]
+            framePoints = [[], [], []]
+            openPoses = []
+            framePosObj = []
+            for stackNum in xrange(self.stackHeightUM + 1):
+                imgPath = stackDir + '\\phase_' + str(stackNum).zfill(3) + '.tif'
+                # store nonzero points
+                img = Image.open(imgPath)
+                imgArr = np.array(img)
+                nind = np.nonzero(imgArr)
+                xs = nind[1] * self.pxSize
+                ys = nind[0] * self.pxSize
+                zs = [stackNum] * len(xs)                
+                framePoints[0] += xs.tolist()
+                framePoints[1] += ys.tolist()
+                framePoints[2] += zs
+                # extract positions
+                img = cv2.imread(imgPath, cv2.IMREAD_GRAYSCALE)
+                blobs = detector.detect(img)
+                stackPoses = []
+                for blob in blobs:
+#                    print str(stackNum) + ': '
+#                    print blob.pt
+                    stackPoses.append(Position(f, (blob.pt[0] * self.pxSize, 
+                                        blob.pt[1] * self.pxSize, stackNum)))
+                    
+                nextOpenPoses = []
+                for pos0 in openPoses:
+                    pos0.isOpen = False
+                    for pos in stackPoses:
+                        if not pos.isMerged and self.isPosInROI(pos0, pos):
+                            pos0.isOpen = True
+                            pos0.xyPoses.append(pos.xyPoses[-1])
+                            pos0.zPoses.append(stackNum)
+                            nextOpenPoses.append(pos0)
+                            pos.isMerged = True
+                            break
+                    
+                    if not pos0.isOpen or stackNum == self.stackHeightUM:
+                        pos0.closePosition()
+                        if len(pos0.zPoses) >= 4:
+                            framePosObj.append(pos0)
+                            framePoses[0].append(pos0.pos[0])
+                            framePoses[1].append(pos0.pos[1])
+                            framePoses[2].append(pos0.pos[2])
+                        
+                for pos in stackPoses:
+                    if not pos.isMerged:
+                        nextOpenPoses.append(pos)
+                openPoses = nextOpenPoses
+            
+            allPosObj.append(framePosObj)
+            allFramePoints.append(framePoints)
+            allFramePoses.append(framePoses)
+            
+            progressBar.progressbar.setValue(f + 1)
+            QtGui.qApp.processEvents()
+        
+        self.allPosObj = allPosObj
+        self.allFramePoints = allFramePoints
+        self.allFramePoses = allFramePoses
+        
+        progressBar._active = False
+        progressBar.close()         
+        
+    def track3d(self):
+        utils.Log('--Perform tracking in 3d')
+        
+        progressBar = ProgressBar(self.numHolos)
+        progressBar.setWindowTitle('Tracking in 3d')
+        progressBar.show()           
+        if self.allPosObj is None:
+            self.constructPosObj()
+            
+        allTracks = []
+        numFrames = self.numHolos
+        openTracks = []
+        for f in xrange(numFrames):
+            framePoses = self.allPosObj[f]
+#            print "No frame poses: " + str(len(framePoses))
+            nextOpenTracks = []
+            frameStartTracks = []
+            for track in openTracks:
+#                print "No. of open tracks: " + str(len(openTracks))
+                track.isOpen = False
+                for pos in framePoses:
+                    if not pos.isTracked and self.isPosInTrackROI(track, pos):
+                        track.isOpen = True
+                        track.poses.append(pos.pos)
+                        nextOpenTracks.append(track)
+                        pos.isTracked = True
+#                        print "Tracked pos"
+                        break
+                
+                # Check the next frame for possible connection
+                if not track.isOpen and f + 1 < numFrames:
+                    nextFramePoses = self.allPosObj[f + 1]
+                    for pos in nextFramePoses:
+                        if self.isPosInTrackROI(track, pos):
+                            track.isOpen = True
+                            track.poses.append(track.poses[-1])
+                            nextOpenTracks.append(track)
+                            break
+            
+                if not track.isOpen or f == numFrames - 1:
+                    track.endHolo = f
+                    track.isOpen = False
+                    
+            for pos in framePoses:
+                if not pos.isTracked:
+                    newTrack = Track(f, pos.pos)
+                    nextOpenTracks.append(newTrack)
+                    frameStartTracks.append(newTrack)
+                    
+            openTracks = nextOpenTracks
+            allTracks.append(frameStartTracks)
+            
+            progressBar.progressbar.setValue(f + 1)
+            QtGui.qApp.processEvents()
+            
+        self.allTracks = allTracks
+        self.exportTracks()
+#        for f in xrange(numFrames):
+#            print "Frame " + str(f) + ':' + str(len(allTracks[f]))
+        progressBar._active = False
+        progressBar.close()
+    
+    def constructPosObj(self):
+        path = self.tempDir + '\\results\\allFramePoses.mat'
+        tempDict = scipy.io.loadmat(path)
+        allFramePoses = tempDict.values()[1]
+        allPosObj = []
+        for f in xrange(np.size(allFramePoses, 0)):
+            framePosObj = []
+            framePoses = allFramePoses[f]
+            for i in xrange(np.size(framePoses, 1)):
+                posObj = Position(f, (framePoses[0][i], framePoses[1][i], 
+                                      framePoses[2][i]))
+                posObj.closePosition()
+                framePosObj.append(posObj)
+            allPosObj.append(framePosObj)
+        self.allPosObj = allPosObj
+    
+    def exportPositions(self):
+        utils.Log('--Exporting position results')
+        self.resultDir = utils.CreateDirectory(self.tempDir, 'results')
+        holoNum = xrange(self.numHolos)
+        res = dict(holoNum=holoNum, framePoints=np.asarray(self.allFramePoints))
+        scipy.io.savemat(self.resultDir + '\\allFramePoints.mat', res)
+        res = dict(holoNum=holoNum, framePoses=np.asarray(self.allFramePoses))
+        scipy.io.savemat(self.resultDir + '\\allFramePoses.mat', res)
+        # drawFrames
+#        self.drawFrames(self.numHolos)        
+        
+    def exportTracks(self):
+        utils.Log('--Exporting tracking results')
+        self.resultDir = utils.CreateDirectory(self.tempDir, 'results')
+        holoNum = xrange(self.numHolos)
+        res = dict(holoNum=holoNum, tracks=np.asarray(self.allTracks))
+        scipy.io.savemat(self.resultDir + '\\allTracks.mat', res)
+        
+    def isPosInROI(self, pos0, pos):
+        (x0, y0) = pos0.xyPoses[-1]
+        (x, y) = pos.xyPoses[-1]
+        if abs(x - x0) <= self.zSearchDX and abs(y - y0) <= self.zSearchDY:
+            return True
+        return False
+    
+    def isPosInTrackROI(self, track, pos):
+        (x0, y0, z0) = track.poses[-1]
+        (x, y, z) = pos.pos
+        if abs(x - x0) <= self.trackDX and abs(y - y0) <= self.trackDY and \
+            abs(z - z0) <= self.trackDZ:
+            return True
+        return False
+    
+    def getDetector(self):
+        # Setup SimpleBlobDetector parameters.
+        params = cv2.SimpleBlobDetector_Params()
+        # Change thresholds and distance
+        params.minThreshold = 20;
+        #params.maxThreshold = 256;
+        params.minDistBetweenBlobs = 75     
+        # Filter by Color.
+        params.filterByColor = True
+        params.blobColor = 255       
+        # Filter by Area.
+        params.filterByArea = True
+        params.minArea = 20
+        # Filter by Circularity
+        params.filterByCircularity = False
+        params.minCircularity = 0.1       
+        # Filter by Convexity
+        params.filterByConvexity = False
+        params.minConvexity = 0.87       
+        # Filter by Inertia
+        params.filterByInertia = False
+        params.minInertiaRatio = 0.01       
+        # Create a detector with the parameters
+        detector = cv2.SimpleBlobDetector(params)
+        return detector
+        
     def updatePhaseImage(self):
         self.prevPhase = self.curPhase
         self.getPhaseImageByHoloNum(self.holoNum)
@@ -366,22 +591,48 @@ class Tracking3D:
     def saveCurPhase(self):
         path = self.directory + "\\test_phase.tif"
         self.remoteKoala.remoteCommands.SaveImageToTiffThroughKoala(4, path) 
+
+    def drawFrames(self, numFrames):
+        fig = plt.figure(2)
+        frameDir = utils.CreateDirectory(self.resultDir, 'frames3d')
+        for f in xrange(numFrames):
+            ax = Axes3D(fig)
+            ax.set_aspect('equal')
+            
+            framePoints = self.allFramePoints[f]
+            X = np.asarray(framePoints[0])
+            Y = np.asarray(framePoints[1])
+            Z = np.asarray(framePoints[2])
+            points = ax.scatter(X, Y, Z, s=0.1, marker='.', color='g', depthshade=False)
+            
+            framePoses = self.allFramePoses[f]
+    #        print framePoses
+            X = np.asarray(framePoses[0])
+            Y = np.asarray(framePoses[1])
+            Z = np.asarray(framePoses[2])
+            poses = ax.scatter(X, Y, Z, s=80, color='k', depthshade=False)
+            
+    #        points.remove()
+            ax.set_xlim(0, 70)
+            ax.set_ylim(0, 70)
+            ax.set_zlim(0, 70)
+            ax.set_xlabel('x (um)')
+            ax.set_ylabel('y (um)')
+            ax.set_zlabel('z (um)')
+            plt.grid()
+            plt.show()
+            plt.savefig(frameDir + '\\frame_' + str(f).zfill(5) + '.png')
+            plt.cla()
         
-    def performTracking(self):
-        utils.Log("Start tracking ...")
-#        self.tempPhaseDir = self.tempDir + '\\phase'
-#        if not os.path.exists(self.tempPhaseDir):
-#            self.saveAllPhaseImages()
-##        self.saveAllPhaseImages()
-#        if self.bcgRemove:
-#            self.computeBcg()
-#            self.subtractBcg()
-#        self.xyFromPhase()
-#        self.testChangeRecDist()
-#        self.saveAllPhaseStackImages()
-#        self.computeStackBcg()
-#        self.subtractStackBcg()
-    # for testing change step rec dist
+        plt.close()
+        
+    def getFPS(self):
+        timePath = self.db.DefaultDirectory + '\\timestamps.txt'
+        tab1 = np.genfromtxt(timePath, dtype=str)
+        times = tab1[:, 3]
+        times = times.astype(np.float)
+        steps = np.diff(times, 1)
+        self.fps = 1 / (np.mean(steps) * 1e-3)
     
     def testChangeRecDist(self):
         for d in xrange(-15, 15, 1):
@@ -396,29 +647,68 @@ class Tracking3D:
         progressBar.progressbar.setValue(self.numHolos / 2)
         time.sleep(1)
         progressBar._active = False
-        progressBar.close()        
-    
+        progressBar.close()
+        
+        
+    def performTracking(self):
+#        self.tempPhaseDir = self.tempDir + '\\phase'
+#        if not os.path.exists(self.tempPhaseDir):
+#            self.saveAllPhaseImages()
+##        self.saveAllPhaseImages()
+#        if self.bcgRemove:
+#            self.computeBcg()
+#            self.subtractBcg()
+#        self.xyFromPhase()
+#        self.testChangeRecDist()
+#        self.saveAllPhaseStackImages()
+        self.numHolos = 2
+#        self.computeStackBcg()
+#        self.subtractStackBcg()
+        
+#        self.detect3DPoses()
+#        self.exportPositions()
+        self.track3d()
+
+        
+# line segment class        
 class HVSeg:
     def __init__(self, top, left, length, orient):
         self.top = top
         self.left = left
         self.length = length
         self.orient = orient
-    
+
+# Trajectory class    
 class Track:
-    def __init__(self):
-        self.startHoloNum = -1
-        self.endHoloNum = -1
-        self.pos = []
+    def __init__(self, startHolo, pos):
+        self.startHolo = startHolo
+        self.endHolo = -1
+        self.poses = [pos]
+        self.isOpen = True
+
+# Ending type of tracjectory    
+class EndType(Enum):
+    OutOfField = 1
+    LoseTrack = 2
 
 class Position:
-    def __init__(self, pos):
+    def __init__(self, holoNum, (x, y, z)):
         self.isOpen = True
-        self.pos = None
-        self.curPos = pos
-        self.zStack = []
-        self.holoNum = -1
+        self.isMerged = False
+        self.isTracked = False
+        self.xyPoses = [(x, y)]
+        self.zPoses = [z]
+        self.holoNum = holoNum
+        self.pos = (-1, -1, -1)
     def closePosition(self):
+        h = len(self.zPoses)
+        if h % 2 != 0:
+            self.pos = self.xyPoses[h / 2] + (self.zPoses[h / 2], )
+        else:
+            (x0, y0) = self.xyPoses[h / 2 - 1]
+            (x1, y1) = self.xyPoses[h / 2]
+            (x, y) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+            self.pos = (x, y, np.mean(self.zPoses))
         self.isOpen = False
         
         

@@ -20,12 +20,13 @@ from tracking3d.core import tracking_3d
 class MainWindow(Thread, QMainWindow):
     def __init__(self):
         # init main panel
-        QMainWindow.__init__(self)
+        QMainWindow.__init__(self, None)
+#        QMainWindow.__init__(self, None, QtCore.Qt.WindowStaysOnTopHint)
         Thread.__init__(self)
         widget = QWidget()
         self.setCentralWidget(widget)
         self.setWindowTitle('3D tracking')
-
+        self.move(600, 150)
         # define main objects
         self.tracking = tracking_3d.Tracking3D.getInstance()
         
