@@ -70,9 +70,9 @@ class Tracking3D:
         self.holoNum = 0
         self.fps = -1
         self.allTracks = None
-        self.trackDX = 4
-        self.trackDY = 4
-        self.trackDZ = 6
+        self.trackDX = 3
+        self.trackDY = 3
+        self.trackDZ = 5
         
     @classmethod # RemoteKoala singleton method
     def getInstance(cls):
@@ -119,6 +119,7 @@ class Tracking3D:
         self.NA = self.db.NA
         self.CCDPixelSizeUM = self.db.CCDPixelSizeUM
         self.pxSize = self.remoteKoala.pxSize
+        print self.pxSize
         self.dof = self.remoteKoala.wavelength / (self.NA**2) * 1e-7
         self.MO = self.CCDPixelSizeUM / self.pxSize
         self.stepRecDist = self.MO**2 * self.dof / self.mediumIndex \
@@ -455,12 +456,12 @@ class Tracking3D:
         numFrames = self.numHolos
         openTracks = []
         for f in xrange(numFrames):
+#            print "Frame: " + str(f)
             framePoses = self.allPosObj[f]
 #            print "No frame poses: " + str(len(framePoses))
             nextOpenTracks = []
-            frameStartTracks = []
+#            print "tracks : poses " + str(len(openTracks)) + ":" + str(len(framePoses))
             for track in openTracks:
-#                print "No. of open tracks: " + str(len(openTracks))
                 track.isOpen = False
                 for pos in framePoses:
                     if not pos.isTracked and self.isPosInTrackROI(track, pos):
@@ -482,18 +483,18 @@ class Tracking3D:
                             break
             
                 if not track.isOpen or f == numFrames - 1:
+#                    print "Closed a track with length: " + str(len(track.poses))
                     track.endHolo = f
                     track.isOpen = False
+                    allTracks.append(track)
                     
             for pos in framePoses:
                 if not pos.isTracked:
+#                    print "New track found!"
                     newTrack = Track(f, pos.pos)
                     nextOpenTracks.append(newTrack)
-                    frameStartTracks.append(newTrack)
-                    
+
             openTracks = nextOpenTracks
-            allTracks.append(frameStartTracks)
-            
             progressBar.progressbar.setValue(f + 1)
             QtGui.qApp.processEvents()
             
@@ -509,17 +510,17 @@ class Tracking3D:
         tempDict = scipy.io.loadmat(path)
         allFramePoses = tempDict.values()[1]
         allPosObj = []
+
         for f in xrange(np.size(allFramePoses, 0)):
             framePosObj = []
             framePoses = allFramePoses[f]
-            for i in xrange(np.size(framePoses, 1)):
-                posObj = Position(f, (framePoses[0][i], framePoses[1][i], 
-                                      framePoses[2][i]))
+            for i in xrange(np.size(framePoses[0])):
+                posObj = Position(f, (framePoses[0][0][i], framePoses[1][0][i], 
+                                      framePoses[2][0][i]))
                 posObj.closePosition()
                 framePosObj.append(posObj)
             allPosObj.append(framePosObj)
         self.allPosObj = allPosObj
-    
     def exportPositions(self):
         utils.Log('--Exporting position results')
         self.resultDir = utils.CreateDirectory(self.tempDir, 'results')
@@ -661,7 +662,7 @@ class Tracking3D:
 #        self.xyFromPhase()
 #        self.testChangeRecDist()
 #        self.saveAllPhaseStackImages()
-        self.numHolos = 2
+        self.numHolos = 120
 #        self.computeStackBcg()
 #        self.subtractStackBcg()
         
