@@ -31,7 +31,7 @@ class DBReader:
         self.dbKoalaExist = True
         self.ConfigROI = [0, 0, 1024, 1024]
         self.conKoala = None
-        self.testDirectory = r'C:\Users\zerodeku\Documents\2016.06.16 15-46'        
+        self.testDirectory = r'C:\Users\zerodeku\Documents\DHM\2016.06.16 15-46'        
         
         # connection to db and import params
         with self.con:
@@ -49,6 +49,8 @@ class DBReader:
                         " WHERE Name='DefaultDirectory'")
             data = cur.fetchone()
             self.DefaultDirectory = data[0]
+            
+            # Override input directory to be test directory
             self.DefaultDirectory = self.testDirectory
             
             cur.execute("SELECT Value FROM DefaultValueTable" + 

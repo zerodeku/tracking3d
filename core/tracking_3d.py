@@ -530,7 +530,7 @@ class Tracking3D:
         res = dict(holoNum=holoNum, framePoses=np.asarray(self.allFramePoses))
         scipy.io.savemat(self.resultDir + '\\allFramePoses.mat', res)
         # drawFrames
-#        self.drawFrames(self.numHolos)        
+        self.drawFrames(self.numHolos)        
         
     def exportTracks(self):
         utils.Log('--Exporting tracking results')
@@ -666,8 +666,8 @@ class Tracking3D:
 #        self.computeStackBcg()
 #        self.subtractStackBcg()
         
-#        self.detect3DPoses()
-#        self.exportPositions()
+        self.detect3DPoses()
+        self.exportPositions()
         self.track3d()
 
         
